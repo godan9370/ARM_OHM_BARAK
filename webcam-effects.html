@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Webcam Effects</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #000;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #eee;
+  }
+  #stage { position: fixed; inset: 0; background: #fff; }
+  canvas#lineCanvas, canvas#voronoiCanvas {
+    position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+  }
+  video, canvas#lineSample { display: none; }
+
+  #placeholder {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #999; font-size: 15px; text-align: center; padding: 20px;
+    background: #fff;
+    cursor: pointer;
+    z-index: 5;
+  }
+
+  #hideHint {
+    position: fixed; top: 14px; right: 14px; z-index: 20;
+    background: rgba(20,20,20,0.55);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px; color: #eee; font-size: 12px;
+    padding: 7px 10px; cursor: pointer;
+    backdrop-filter: blur(6px); user-select: none;
+  }
+
+  .panel {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    z-index: 20;
+    display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center;
+    justify-content: center;
+    max-width: min(94vw, 920px);
+    background: rgba(20,20,20,0.6);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    padding: 12px 16px;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+  }
+  .panel.hidden { opacity: 0; pointer-events: none; transform: translateX(-50%) translateY(10px); }
+
+  .modeGroup {
+    display: flex; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; overflow: hidden;
+  }
+  .modeGroup button {
+    border: none; border-radius: 0; background: transparent;
+  }
+  .modeGroup button.active { background: rgba(255,255,255,0.22); }
+
+  .divider { width: 1px; align-self: stretch; background: rgba(255,255,255,0.15); }
+
+  .field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: #bbb; }
+  .field input[type="range"] { width: 120px; }
+  button {
+    background: rgba(255,255,255,0.08); color: #eee; border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 6px; padding: 8px 14px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { background: rgba(255,255,255,0.16); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  label.check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #bbb; }
+
+  #status {
+    position: fixed; bottom: 78px; left: 50%; transform: translateX(-50%);
+    font-size: 12px; color: #ccc; background: rgba(20,20,20,0.6); padding: 6px 10px;
+    border-radius: 6px; z-index: 20;
+  }
+  #status:empty { display: none; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <canvas id="lineCanvas"></canvas>
+  <canvas id="voronoiCanvas"></canvas>
+  <canvas id="lineSample"></canvas>
+  <video id="video" playsinline autoplay muted></video>
+  <div id="placeholder">Click to start camera</div>
+</div>
+
+<div id="hideHint">Press H to hide controls</div>
+<div id="status"></div>
+
+<div class="panel" id="panel">
+  <div class="modeGroup">
+    <button id="modeLineArtBtn" class="active">Line Art</button>
+    <button id="modeVoronoiBtn">Voronoi</button>
+  </div>
+
+  <div class="divider"></div>
+
+  <button id="toggleBtn">Start Camera</button>
+  <button id="fullscreenBtn">Fullscreen</button>
+  <button id="regenBtn" class="mode-voronoi">Regenerate Cells</button>
+  <button id="saveBtn" disabled>Save PNG</button>
+
+  <div class="divider"></div>
+
+  <!-- Line art controls -->
+  <div class="field mode-lineart">
+    <span>Density (<span id="linesVal"></span>)</span>
+    <input type="range" id="lines" min="30" max="200" step="1">
+  </div>
+  <div class="field mode-lineart">
+    <span>Thickness (<span id="thickVal"></span>)</span>
+    <input type="range" id="thick" min="20" max="100" step="1">
+  </div>
+  <div class="field mode-lineart">
+    <span>Smoothing (<span id="smoothVal"></span>)</span>
+    <input type="range" id="smooth" min="0" max="90" step="1">
+  </div>
+  <label class="check mode-lineart"><input type="checkbox" id="invert"> Invert</label>
+
+  <!-- Voronoi controls -->
+  <div class="field mode-voronoi">
+    <span>Cells (<span id="countVal"></span>)</span>
+    <input type="range" id="count" min="12" max="220" step="1">
+  </div>
+  <div class="field mode-voronoi">
+    <span>Edge depth (<span id="edgeVal"></span>)</span>
+    <input type="range" id="edge" min="0" max="100" step="1">
+  </div>
+  <label class="check mode-voronoi"><input type="checkbox" id="trueColor" checked> True colors</label>
+  <label class="check mode-voronoi"><input type="checkbox" id="dots" checked> Show dots</label>
+  <label class="check mode-voronoi"><input type="checkbox" id="drift" checked> Drift</label>
+  <label class="check mode-voronoi"><input type="checkbox" id="colorCycle"> Color cycle</label>
+
+  <!-- Shared -->
+  <label class="check"><input type="checkbox" id="mirror" checked> Mirror</label>
+</div>
+
+<script>
+(() => {
+  const MAX_POINTS = 220;
+
+  // ---------- shared elements ----------
+  const video = document.getElementById('video');
+  const stage = document.getElementById('stage');
+  const placeholder = document.getElementById('placeholder');
+  const toggleBtn = document.getElementById('toggleBtn');
+  const fullscreenBtn = document.getElementById('fullscreenBtn');
+  const regenBtn = document.getElementById('regenBtn');
+  const saveBtn = document.getElementById('saveBtn');
+  const statusEl = document.getElementById('status');
+  const panel = document.getElementById('panel');
+  const hideHint = document.getElementById('hideHint');
+  const mirrorInput = document.getElementById('mirror');
+
+  const modeLineArtBtn = document.getElementById('modeLineArtBtn');
+  const modeVoronoiBtn = document.getElementById('modeVoronoiBtn');
+
+  // ---------- line art elements ----------
+  const lineCanvas = document.getElementById('lineCanvas');
+  const lineSampleCanvas = document.getElementById('lineSample');
+  const linesInput = document.getElementById('lines');
+  const thickInput = document.getElementById('thick');
+  const smoothInput = document.getElementById('smooth');
+  const invertInput = document.getElementById('invert');
+  const linesVal = document.getElementById('linesVal');
+  const thickVal = document.getElementById('thickVal');
+  const smoothVal = document.getElementById('smoothVal');
+
+  linesInput.value = 90;
+  thickInput.value = 70;
+  smoothInput.value = 55;
+
+  const lineCtx = lineCanvas.getContext('2d');
+  const lineSampleCtx = lineSampleCanvas.getContext('2d', { willReadFrequently: true });
+  const LINE_SAMPLE_W = 200;
+  let LINE_SAMPLE_H = 150;
+
+  // ---------- voronoi elements ----------
+  const voronoiCanvas = document.getElementById('voronoiCanvas');
+  const countInput = document.getElementById('count');
+  const edgeInput = document.getElementById('edge');
+  const trueColorInput = document.getElementById('trueColor');
+  const dotsInput = document.getElementById('dots');
+  const driftInput = document.getElementById('drift');
+  const colorCycleInput = document.getElementById('colorCycle');
+  const countVal = document.getElementById('countVal');
+  const edgeVal = document.getElementById('edgeVal');
+
+  countInput.value = 140;
+  edgeInput.value = 25;
+
+  function updateLabels() {
+    linesVal.textContent = linesInput.value;
+    thickVal.textContent = thickInput.value;
+    smoothVal.textContent = smoothInput.value;
+    countVal.textContent = countInput.value;
+    edgeVal.textContent = edgeInput.value;
+  }
+  [linesInput, thickInput, smoothInput, countInput, edgeInput].forEach(el =>
+    el.addEventListener('input', updateLabels));
+  updateLabels();
+
+  // ---------- mode switching ----------
+  let mode = 'lineart';
+  function setMode(newMode) {
+    mode = newMode;
+    lineCanvas.style.display = mode === 'lineart' ? 'block' : 'none';
+    voronoiCanvas.style.display = mode === 'voronoi' ? 'block' : 'none';
+    document.querySelectorAll('.mode-lineart').forEach(el => el.style.display = mode === 'lineart' ? '' : 'none');
+    document.querySelectorAll('.mode-voronoi').forEach(el => el.style.display = mode === 'voronoi' ? '' : 'none');
+    modeLineArtBtn.classList.toggle('active', mode === 'lineart');
+    modeVoronoiBtn.classList.toggle('active', mode === 'voronoi');
+  }
+  modeLineArtBtn.addEventListener('click', () => setMode('lineart'));
+  modeVoronoiBtn.addEventListener('click', () => setMode('voronoi'));
+
+  // ---------- shared viewport size ----------
+  let W = window.innerWidth, H = window.innerHeight;
+
+  function resizeAll() {
+    W = window.innerWidth; H = window.innerHeight;
+
+    lineCanvas.width = W; lineCanvas.height = H;
+    LINE_SAMPLE_H = Math.max(2, Math.round(LINE_SAMPLE_W * H / W));
+    lineSampleCanvas.width = LINE_SAMPLE_W;
+    lineSampleCanvas.height = LINE_SAMPLE_H;
+    currentLineCount = -1;
+
+    voronoiCanvas.width = W; voronoiCanvas.height = H;
+    if (gl) gl.viewport(0, 0, W, H);
+    regeneratePoints();
+  }
+  window.addEventListener('resize', resizeAll);
+
+  // =========================================================
+  // LINE ART renderer
+  // =========================================================
+  let prevThickness = null;
+  let currentLineCount = -1;
+  let tLine = 0;
+
+  function ensureBuffer(lineCount) {
+    if (lineCount !== currentLineCount) {
+      currentLineCount = lineCount;
+      prevThickness = new Float32Array(lineCount * LINE_SAMPLE_W);
+    }
+  }
+
+  function luminance(r, g, b) { return 0.299 * r + 0.587 * g + 0.114 * b; }
+
+  function drawCover2D(ctx, dW, dH, mirror) {
+    const vW = video.videoWidth, vH = video.videoHeight;
+    if (!vW || !vH) return false;
+    const vRatio = vW / vH, dRatio = dW / dH;
+    let sx, sy, sw, sh;
+    if (vRatio > dRatio) { sh = vH; sw = vH * dRatio; sx = (vW - sw) / 2; sy = 0; }
+    else { sw = vW; sh = vW / dRatio; sx = 0; sy = (vH - sh) / 2; }
+    ctx.save();
+    if (mirror) { ctx.translate(dW, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, dW, dH);
+    ctx.restore();
+    return true;
+  }
+
+  function renderLineArt() {
+    const mirror = mirrorInput.checked;
+    const invert = invertInput.checked;
+    const lineCount = parseInt(linesInput.value, 10);
+    const maxThickPx = (parseInt(thickInput.value, 10) / 100) * (H / lineCount) * 1.15;
+    const minThickPx = 0.6;
+    const smoothing = parseInt(smoothInput.value, 10) / 100;
+
+    ensureBuffer(lineCount);
+    if (!drawCover2D(lineSampleCtx, LINE_SAMPLE_W, LINE_SAMPLE_H, mirror)) return;
+
+    let data;
+    try { data = lineSampleCtx.getImageData(0, 0, LINE_SAMPLE_W, LINE_SAMPLE_H).data; }
+    catch (e) { return; }
+
+    lineCtx.fillStyle = invert ? '#000' : '#fff';
+    lineCtx.fillRect(0, 0, W, H);
+    lineCtx.fillStyle = invert ? '#fff' : '#000';
+
+    const rowSpacing = H / lineCount;
+    tLine += 0.02;
+
+    for (let li = 0; li < lineCount; li++) {
+      const centerY = (li + 0.5) * rowSpacing;
+      const sampleY = Math.min(LINE_SAMPLE_H - 1, Math.floor((li + 0.5) / lineCount * LINE_SAMPLE_H));
+
+      const topPts = [];
+      const botPts = [];
+
+      for (let sx = 0; sx < LINE_SAMPLE_W; sx++) {
+        const idx = (sampleY * LINE_SAMPLE_W + sx) * 4;
+        const b = luminance(data[idx], data[idx + 1], data[idx + 2]);
+        const darkness = 1 - b / 255;
+        let rawThick = minThickPx + darkness * darkness * maxThickPx;
+
+        const wobble = Math.sin(sx * 0.35 + li * 1.7 + tLine) * 0.4;
+        rawThick = Math.max(minThickPx, rawThick + wobble);
+
+        const bufIdx = li * LINE_SAMPLE_W + sx;
+        const prev = prevThickness[bufIdx];
+        const smoothedThick = prev === 0 ? rawThick : prev * smoothing + rawThick * (1 - smoothing);
+        prevThickness[bufIdx] = smoothedThick;
+
+        const outX = (sx / (LINE_SAMPLE_W - 1)) * W;
+        topPts.push([outX, centerY - smoothedThick / 2]);
+        botPts.push([outX, centerY + smoothedThick / 2]);
+      }
+
+      lineCtx.beginPath();
+      lineCtx.moveTo(topPts[0][0], topPts[0][1]);
+      for (let i = 1; i < topPts.length; i++) lineCtx.lineTo(topPts[i][0], topPts[i][1]);
+      for (let i = botPts.length - 1; i >= 0; i--) lineCtx.lineTo(botPts[i][0], botPts[i][1]);
+      lineCtx.closePath();
+      lineCtx.fill();
+    }
+  }
+
+  // =========================================================
+  // VORONOI renderer (WebGL)
+  // =========================================================
+  const gl = voronoiCanvas.getContext('webgl', { preserveDrawingBuffer: true }) ||
+             voronoiCanvas.getContext('experimental-webgl', { preserveDrawingBuffer: true });
+
+  if (!gl) {
+    statusEl.textContent = 'WebGL is not available in this browser (Voronoi mode disabled).';
+  }
+
+  const VERT_SRC = `
+    attribute vec2 aPos;
+    void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+  `;
+
+  const FRAG_SRC = `
+    precision mediump float;
+    #define MAX_POINTS ${MAX_POINTS}
+
+    uniform vec2 uResolution;
+    uniform vec2 uPoints[MAX_POINTS];
+    uniform int uCount;
+    uniform sampler2D uVideo;
+    uniform float uVideoAspect;
+    uniform float uMirror;
+    uniform float uEdge;
+    uniform float uShowDots;
+    uniform float uHueShift;
+    uniform float uTrueColor;
+
+    vec3 hsl2rgb(vec3 hsl) {
+      float h = hsl.x, s = hsl.y, l = hsl.z;
+      float c = (1.0 - abs(2.0 * l - 1.0)) * s;
+      float hh = h * 6.0;
+      float x = c * (1.0 - abs(mod(hh, 2.0) - 1.0));
+      vec3 rgb;
+      if (hh < 1.0) rgb = vec3(c, x, 0.0);
+      else if (hh < 2.0) rgb = vec3(x, c, 0.0);
+      else if (hh < 3.0) rgb = vec3(0.0, c, x);
+      else if (hh < 4.0) rgb = vec3(0.0, x, c);
+      else if (hh < 5.0) rgb = vec3(x, 0.0, c);
+      else rgb = vec3(c, 0.0, x);
+      return rgb + vec3(l - c * 0.5);
+    }
+
+    vec3 rgb2hsl(vec3 c) {
+      float mx = max(max(c.r, c.g), c.b);
+      float mn = min(min(c.r, c.g), c.b);
+      float l = (mx + mn) * 0.5;
+      float d = mx - mn;
+      float h = 0.0;
+      float s = 0.0;
+      if (d > 0.0001) {
+        s = d / (1.0 - abs(2.0 * l - 1.0));
+        if (mx == c.r) h = mod((c.g - c.b) / d, 6.0);
+        else if (mx == c.g) h = (c.b - c.r) / d + 2.0;
+        else h = (c.r - c.g) / d + 4.0;
+        h /= 6.0;
+      }
+      return vec3(h, s, l);
+    }
+
+    vec3 sampleVideoAvg(vec2 uv) {
+      vec2 o = vec2(0.006, 0.008);
+      vec3 c = texture2D(uVideo, uv).rgb;
+      c += texture2D(uVideo, clamp(uv + vec2(o.x, 0.0), 0.0, 1.0)).rgb;
+      c += texture2D(uVideo, clamp(uv - vec2(o.x, 0.0), 0.0, 1.0)).rgb;
+      c += texture2D(uVideo, clamp(uv + vec2(0.0, o.y), 0.0, 1.0)).rgb;
+      c += texture2D(uVideo, clamp(uv - vec2(0.0, o.y), 0.0, 1.0)).rgb;
+      return c / 5.0;
+    }
+
+    vec2 coverUV(vec2 pixelPos) {
+      vec2 uv = pixelPos / uResolution;
+      if (uMirror > 0.5) uv.x = 1.0 - uv.x;
+      float canvasAspect = uResolution.x / uResolution.y;
+      if (uVideoAspect > canvasAspect) {
+        float scale = canvasAspect / uVideoAspect;
+        uv.x = (uv.x - 0.5) * scale + 0.5;
+      } else {
+        float scale = uVideoAspect / canvasAspect;
+        uv.y = (uv.y - 0.5) * scale + 0.5;
+      }
+      return clamp(uv, 0.0, 1.0);
+    }
+
+    void main() {
+      vec2 fragPos = gl_FragCoord.xy;
+
+      float minDist = 1.0e9;
+      float minDist2 = 1.0e9;
+      vec2 nearest = vec2(0.0);
+      int nearestIdx = 0;
+
+      for (int i = 0; i < MAX_POINTS; i++) {
+        if (i >= uCount) break;
+        vec2 p = uPoints[i];
+        float d = distance(fragPos, p);
+        if (d < minDist) {
+          minDist2 = minDist;
+          minDist = d;
+          nearest = p;
+          nearestIdx = i;
+        } else if (d < minDist2) {
+          minDist2 = d;
+        }
+      }
+
+      vec2 uv = coverUV(nearest);
+      vec3 videoColor = sampleVideoAvg(uv);
+
+      vec3 col;
+      if (uTrueColor > 0.5) {
+        vec3 hslv = rgb2hsl(videoColor);
+        hslv.y = clamp(hslv.y * 1.5 + 0.18, 0.0, 1.0);
+        hslv.z = clamp(mix(hslv.z, 0.5, 0.2), 0.12, 0.88);
+        hslv.x = fract(hslv.x + uHueShift);
+        col = hsl2rgb(hslv);
+      } else {
+        float lum = dot(videoColor, vec3(0.299, 0.587, 0.114));
+        float hue = fract(uHueShift + lum * 1.15 + float(nearestIdx) * 0.093);
+        col = hsl2rgb(vec3(hue, 0.72, 0.56));
+      }
+
+      float borderWidth = mix(0.0, 26.0, uEdge);
+      float edgeFactor = smoothstep(0.0, max(borderWidth, 0.001), minDist2 - minDist);
+      col *= mix(0.32, 1.0, edgeFactor);
+
+      if (uShowDots > 0.5) {
+        float distToOwn = distance(fragPos, nearest);
+        float dot = 1.0 - smoothstep(2.5, 4.5, distToOwn);
+        col = mix(col, vec3(0.04), dot);
+      }
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `;
+
+  function compileShader(type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(sh));
+      statusEl.textContent = 'Shader compile error (see console).';
+    }
+    return sh;
+  }
+
+  let prog, aPosLoc, uniforms = {};
+
+  if (gl) {
+    prog = gl.createProgram();
+    gl.attachShader(prog, compileShader(gl.VERTEX_SHADER, VERT_SRC));
+    gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, FRAG_SRC));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error(gl.getProgramInfoLog(prog));
+      statusEl.textContent = 'Shader link error (see console).';
+    }
+    gl.useProgram(prog);
+
+    const quad = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+    aPosLoc = gl.getAttribLocation(prog, 'aPos');
+    gl.enableVertexAttribArray(aPosLoc);
+    gl.vertexAttribPointer(aPosLoc, 2, gl.FLOAT, false, 0, 0);
+
+    uniforms.uResolution = gl.getUniformLocation(prog, 'uResolution');
+    uniforms.uPoints = gl.getUniformLocation(prog, 'uPoints');
+    uniforms.uCount = gl.getUniformLocation(prog, 'uCount');
+    uniforms.uVideo = gl.getUniformLocation(prog, 'uVideo');
+    uniforms.uVideoAspect = gl.getUniformLocation(prog, 'uVideoAspect');
+    uniforms.uMirror = gl.getUniformLocation(prog, 'uMirror');
+    uniforms.uEdge = gl.getUniformLocation(prog, 'uEdge');
+    uniforms.uShowDots = gl.getUniformLocation(prog, 'uShowDots');
+    uniforms.uHueShift = gl.getUniformLocation(prog, 'uHueShift');
+    uniforms.uTrueColor = gl.getUniformLocation(prog, 'uTrueColor');
+
+    const videoTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, videoTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+
+    voronoiCanvas._videoTex = videoTex;
+  }
+
+  let basePoints = [];
+  let livePoints = new Float32Array(MAX_POINTS * 2);
+  let driftPhase = [];
+  let tVoronoi = 0;
+
+  function regeneratePoints() {
+    const count = Math.min(MAX_POINTS, parseInt(countInput.value, 10));
+    const aspect = W / H;
+    const cols = Math.max(1, Math.round(Math.sqrt(count * aspect)));
+    const rows = Math.max(1, Math.ceil(count / cols));
+    const cellW = W / cols, cellH = H / rows;
+    const pts = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (pts.length >= count) break;
+        const jx = (Math.random() - 0.5) * cellW * 0.8;
+        const jy = (Math.random() - 0.5) * cellH * 0.8;
+        pts.push([(c + 0.5) * cellW + jx, (r + 0.5) * cellH + jy]);
+      }
+    }
+    basePoints = pts;
+    driftPhase = pts.map(() => Math.random() * Math.PI * 2);
+  }
+
+  regenBtn.addEventListener('click', regeneratePoints);
+  countInput.addEventListener('change', regeneratePoints);
+
+  function renderVoronoi() {
+    if (!gl) return;
+    tVoronoi += 0.016;
+    const drift = driftInput.checked;
+    const mirror = mirrorInput.checked ? 1.0 : 0.0;
+    const edge = parseInt(edgeInput.value, 10) / 100;
+    const showDots = dotsInput.checked ? 1.0 : 0.0;
+    const hueShift = colorCycleInput.checked ? (tVoronoi * 0.02) % 1.0 : 0.0;
+    const count = Math.min(MAX_POINTS, basePoints.length);
+
+    for (let i = 0; i < count; i++) {
+      let x = basePoints[i][0], y = basePoints[i][1];
+      if (drift) {
+        x += Math.sin(tVoronoi * 0.5 + driftPhase[i]) * 10.0;
+        y += Math.cos(tVoronoi * 0.4 + driftPhase[i] * 1.3) * 10.0;
+      }
+      livePoints[i * 2] = x;
+      livePoints[i * 2 + 1] = y;
+    }
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, voronoiCanvas._videoTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+
+    gl.useProgram(prog);
+    gl.uniform2f(uniforms.uResolution, W, H);
+    gl.uniform2fv(uniforms.uPoints, livePoints);
+    gl.uniform1i(uniforms.uCount, count);
+    gl.uniform1i(uniforms.uVideo, 0);
+    gl.uniform1f(uniforms.uVideoAspect, (video.videoWidth || 4) / (video.videoHeight || 3));
+    gl.uniform1f(uniforms.uMirror, mirror);
+    gl.uniform1f(uniforms.uEdge, edge);
+    gl.uniform1f(uniforms.uShowDots, showDots);
+    gl.uniform1f(uniforms.uHueShift, hueShift);
+    gl.uniform1f(uniforms.uTrueColor, trueColorInput.checked ? 1.0 : 0.0);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  // =========================================================
+  // shared render loop / camera controls
+  // =========================================================
+  let stream = null;
+  let rafId = null;
+
+  function renderFrame() {
+    rafId = requestAnimationFrame(renderFrame);
+    if (video.readyState < 2) return;
+    if (mode === 'lineart') renderLineArt();
+    else renderVoronoi();
+  }
+
+  async function startCamera() {
+    statusEl.textContent = 'Requesting camera access…';
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+        audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+      placeholder.style.display = 'none';
+      toggleBtn.textContent = 'Stop Camera';
+      saveBtn.disabled = false;
+      statusEl.textContent = '';
+      currentLineCount = -1;
+      cancelAnimationFrame(rafId);
+      renderFrame();
+    } catch (err) {
+      statusEl.textContent = 'Camera access failed: ' + err.message;
+    }
+  }
+
+  function stopCamera() {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+    if (stream) {
+      stream.getTracks().forEach(tr => tr.stop());
+      stream = null;
+    }
+    video.srcObject = null;
+    placeholder.style.display = 'flex';
+    toggleBtn.textContent = 'Start Camera';
+    saveBtn.disabled = true;
+    lineCtx.fillStyle = '#fff';
+    lineCtx.fillRect(0, 0, W, H);
+    if (gl) { gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
+  }
+
+  toggleBtn.addEventListener('click', () => { stream ? stopCamera() : startCamera(); });
+  placeholder.addEventListener('click', () => { if (!stream) startCamera(); });
+
+  saveBtn.addEventListener('click', () => {
+    const activeCanvas = mode === 'lineart' ? lineCanvas : voronoiCanvas;
+    const link = document.createElement('a');
+    link.download = (mode === 'lineart' ? 'line-art-' : 'voronoi-') + Date.now() + '.png';
+    link.href = activeCanvas.toDataURL('image/png');
+    link.click();
+  });
+
+  fullscreenBtn.addEventListener('click', () => {
+    if (!document.fullscreenElement) {
+      stage.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.();
+    }
+  });
+
+  let controlsHidden = false;
+  function setControlsHidden(hidden) {
+    controlsHidden = hidden;
+    panel.classList.toggle('hidden', hidden);
+    hideHint.style.opacity = hidden ? '0' : '1';
+    hideHint.style.pointerEvents = hidden ? 'none' : 'auto';
+  }
+  hideHint.addEventListener('click', () => setControlsHidden(true));
+  window.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() === 'h') setControlsHidden(!controlsHidden);
+  });
+
+  // ---------- init ----------
+  setMode('lineart');
+  resizeAll();
+  lineCtx.fillStyle = '#fff';
+  lineCtx.fillRect(0, 0, W, H);
+  if (gl) { gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
+})();
+</script>
+
+</body>
+</html>
